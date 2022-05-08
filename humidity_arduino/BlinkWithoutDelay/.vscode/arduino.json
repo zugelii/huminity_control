@@ -1,0 +1,6 @@
+{
+    "board": "arduino:avr:atmega128",
+    "programmer": "arduino:usbasp",
+    "sketch": "master\\master.ino",
+    "port": "COM8"
+}
