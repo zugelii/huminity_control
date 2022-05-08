@@ -1,0 +1,7 @@
+{
+    "configuration": "cpu=16MHzatmega328",
+    "board": "arduino:avr:pro",
+    "programmer": "arduino:usbasp",
+    "port": "COM8",
+    "sketch": "slave\\slave.ino"
+}
