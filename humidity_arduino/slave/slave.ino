@@ -12,7 +12,8 @@
  */
 #include <SPI.h>
 #include "printf.h"
-#include "RF24.h"
+#include <RF24.h>
+#include <RF24Network.h>
 
 #define MY_CE_PIN       5
 #define MY_CS_PIN       2
@@ -21,122 +22,88 @@
 // instantiate an object for the nRF24L01 transceiver
 RF24 radio(MY_CE_PIN, MY_CS_PIN); // using pin 5 for the CE pin, and pin 2 for the CSN pin
 
-// Let these addresses be used for the pair
-uint8_t address[][6] = {"1Node", "2Node"};
-// It is very helpful to think of an address as a path instead of as
-// an identifying device destination
+RF24Network network(radio);       // Network uses that radio
+const uint16_t this_node = 02;    // Address of our node in Octal format ( 04,031, etc)
+const uint16_t other_node = 01;   // Address of the other node in Octal format
 
-// to use different addresses on a pair of radios, we need a variable to
-// uniquely identify which address this radio will use to transmit
-bool radioNumber = 1; // 0 uses address[0] to transmit, 1 uses address[1] to transmit
+/**** Create a large array for data to be received ****
+* MAX_PAYLOAD_SIZE is defined in RF24Network_config.h
+* Payload sizes of ~1-2 KBytes or more are practical when radio conditions are good
+*/
+uint8_t dataBuffer[MAX_PAYLOAD_SIZE]; //MAX_PAYLOAD_SIZE is defined in RF24Network_config.h
 
-// Used to control whether this node is sending or receiving
-enum ROLE{
-    NO_MODE,
-    TX_MODE,
-    RX_MODE,
-    NUM_MODE
-};
-enum ROLE role_ = RX_MODE;  
-// For this example, we'll be using a payload containing
-// a single float number that will be incremented
-// on every successful transmission
-float payload = 0.0;
-
-void setup() {
+void setup() 
+{
     pinMode(MY_RELAY_PIN, OUTPUT);
-  Serial.begin(115200);
-  while (!Serial) {
-    // some boards need to wait to ensure access to serial over USB
-  }
+    Serial.begin(115200);
+    while (!Serial) 
+    {
+        // some boards need to wait to ensure access to serial over USB
+    }
 
-  // initialize the transceiver on the SPI bus
-  if (!radio.begin()) {
-    Serial.println(F("radio hardware is not responding!!"));
-    while (1) {} // hold in infinite loop
-  }
+    // initialize the transceiver on the SPI bus
+    if (!radio.begin()) 
+    {
+        Serial.println(F("radio hardware is not responding!!"));
+        while (1) {} // hold in infinite loop
+    }
 
-  // print example's introductory prompt
-  Serial.println(F("SLAVE RF24/examples/GettingStarted"));
+    // print example's introductory prompt
+    Serial.println(F("SLAVE RF24/examples/GettingStarted"));
 
-  // To set the radioNumber via the Serial monitor on startup
- // Serial.println(F("Which radio is this? Enter '0' or '1'. Defaults to '0'"));
- // while (!Serial.available()) {
-    // wait for user input
-  //}
- // char input = Serial.parseInt();
- // radioNumber = input == 1;
- // Serial.print(F("radioNumber = "));
- // Serial.println((int)radioNumber);
+    radio.setChannel(90);
+    network.begin(/*node address*/ this_node);
 
-  // Set the PA Level low to try preventing power supply related problems
-  // because these examples are likely run with nodes in close proximity to
-  // each other.
-  radio.setPALevel(RF24_PA_LOW);  // RF24_PA_MAX is default.
-
-  // save on transmission time by setting the radio to only transmit the
-  // number of bytes we need to transmit a float
-  radio.setPayloadSize(sizeof(payload)); // float datatype occupies 4 bytes
-
-  // set the TX address of the RX node into the TX pipe
-  radio.openWritingPipe(address[radioNumber]);     // always uses pipe 0
-
-  // set the RX address of the TX node into a RX pipe
-  radio.openReadingPipe(1, address[!radioNumber]); // using pipe 1
-
-  // additional setup specific to the node's role
-  if (TX_MODE == role_) {
-    radio.stopListening();  // put radio in TX mode
-  } else {
-    radio.startListening(); // put radio in RX mode
-  }
-
-  // For debugging info
-  printf_begin();             // needed only once for printing details
-  radio.printDetails();       // (smaller) function that prints raw register values
-  radio.printPrettyDetails(); // (larger) function that prints human readable data
+    // For debugging info
+    printf_begin();             // needed only once for printing details
+    //radio.printDetails();       // (smaller) function that prints raw register values
+    radio.printPrettyDetails(); // (larger) function that prints human readable data
 
 } // setup
 char flag = HIGH;
-void loop() {
 
-  if (TX_MODE == role_) {
-    // This device is a TX node
+// Variable for calculating how long between RX
+uint32_t timeBetweenPackets = 0;
 
-    unsigned long start_timer = micros();                    // start the timer
-    bool report = radio.write(&payload, sizeof(float));      // transmit & save the report
-    unsigned long end_timer = micros();                      // end the timer
+void loop() 
+{
+    network.update();                                 // Check the network regularly
+    while (network.available()) 
+    {                     // Is there anything ready for us?
+        RF24NetworkHeader header;                       // If so, grab it and print it out
+        uint16_t payloadSize = network.peek(header);    // Use peek() to get the size of the payload
+        network.read(header, &dataBuffer, payloadSize); // Get the data
+        Serial.print("Received packet, size ");         // Print info about received data
+        Serial.print(payloadSize);
+        Serial.print("(");
+        Serial.print(millis() - timeBetweenPackets);
+        Serial.println("ms since last)");
+        timeBetweenPackets = millis();
 
-    if (report) {
-      Serial.print(F("Transmission successful! "));          // payload was delivered
-      Serial.print(F("Time to transmit = "));
-      Serial.print(end_timer - start_timer);                 // print the timer result
-      Serial.print(F(" us. Sent: "));
-      Serial.println(payload);                               // print payload sent
-      payload += 0.01;                                       // increment float payload
+        // Uncomment below to print the entire payload
 
-    } else {
-      Serial.println(F("Transmission failed or timed out")); // payload was not delivered
+        for(uint32_t i = 0; i < payloadSize; i++) 
+        {
+            Serial.print(dataBuffer[i]);
+            Serial.print(F(": "));
+            if(i % 50 == 49) 
+            {
+                //Add a line break every 50 characters
+                Serial.println();
+            }
+        }
+        Serial.println();
+        if(payloadSize > 0)
+        {
+            delay(10);
+            //senddata to master
+            Serial.println("send data to master");
+                // Fragmentation/reassembly is transparent. Just send payloads as usual.
+            RF24NetworkHeader headerm(/*to node*/ 0);
+            bool ok = network.write(headerm, &dataBuffer, payloadSize);
+            Serial.println(ok ? F(" ok.") : F(" failed."));
+        }
+        //digitalWrite(MY_RELAY_PIN, flag);
+        //flag = flag == HIGH ? LOW : HIGH;     
     }
-
-    // to make this example readable in the serial monitor
-    delay(1000);  // slow transmissions down by 1 second
-
-  } else {
-    // This device is a RX node
-
-    uint8_t pipe;
-    if (radio.available(&pipe)) {             // is there a payload? get the pipe number that recieved it
-      uint8_t bytes = radio.getPayloadSize(); // get the size of the payload
-      radio.read(&payload, bytes);            // fetch payload from FIFO
-      Serial.print(F("Received "));
-      Serial.print(bytes);                    // print the size of the payload
-      Serial.print(F(" bytes on pipe "));
-      Serial.print(pipe);                     // print the pipe number
-      Serial.print(F(": "));
-      Serial.println(payload);                // print the payload's value
-              digitalWrite(MY_RELAY_PIN, flag);
-        flag = flag == HIGH ? LOW : HIGH;
-    }
-  } // role
 } // loop
