@@ -1,0 +1,9 @@
+*.sln
+*.vcxproj
+*.filters
+*.user
+AVR_PRO.Release.debugger_launch.json
+.vs
+__vm
+board.txt
+Release
