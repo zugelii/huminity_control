@@ -1,4 +1,5 @@
 
+#include <Wire.h>
 #include <EEPROM.h>
 #include "wiring_private.h"
 #include <math.h> 
@@ -7,7 +8,7 @@
 #include "bh1750.h"
 
 U08 node_address;
-
+char node_mode;
 //ego address map
 //00 : 0x0B     //start
 //01 : 0x01	    //adress
@@ -24,7 +25,7 @@ bool read_ego_address()
 	buf[1] = EEPROM[0x01];
 	buf[2] = EEPROM[0x02];
 	buf[3] = EEPROM[0x03];
-	buf[3] = EEPROM[0x04];
+	buf[4] = EEPROM[0x04];
 	crc_res = CRC(buf, 3);
 	if ((EEPROM[0x00] != 0xb) ||
 		(EEPROM[0x01] < 0x01) ||
@@ -38,6 +39,7 @@ bool read_ego_address()
 	else
 	{
 		node_address = buf[1];
+		node_mode = buf[2];
 	}
 	return res;
 }
@@ -47,17 +49,28 @@ bool write_ego_address(U08 addr, char mode)
 	U08 buf[4];
 	U16 crc_res;
 	bool res = true;
-	buf[0] = 0x0b;
-	buf[1] = addr;
-	buf[2] = mode;
-	crc_res = CRC(buf, 3);
-	buf[3] = (crc_res >> 0x8) & 0xff;
-	buf[4] = (crc_res >> 0x0) & 0xff;
-	EEPROM.write(0, buf[0]);
-	EEPROM.write(1, buf[1]);
-	EEPROM.write(2, buf[2]);
-	EEPROM.write(3, buf[3]);
-	EEPROM.write(4, buf[4]);
+	if ((addr > 0) &&((mode == 's') || (mode = 'm')))
+	{
+		buf[0] = 0x0b;
+		buf[1] = addr;
+		buf[2] = mode;
+		crc_res = CRC(buf, 3);
+		buf[3] = (crc_res >> 0x8) & 0xff;
+		buf[4] = (crc_res >> 0x0) & 0xff;
+		EEPROM.write(0, buf[0]);
+		EEPROM.write(1, buf[1]);
+		EEPROM.write(2, buf[2]);
+		EEPROM.write(3, buf[3]);
+		EEPROM.write(4, buf[4]);
+		node_address = addr;
+		node_mode = mode;
+	}
+	else
+	{
+		res = false;
+	}
+
+	return res;
 }
 
 void setup()
@@ -74,10 +87,18 @@ void setup()
 		U08 addr = Serial.parseInt();
 		Serial.print("input address = ");
 		Serial.println((int)addr);
+		Serial.println("please input the node mode: m/s");
+		while (!Serial.available()) {
+			// wait for user input
+		}
 		char mode = Serial.read();
 		Serial.print("input mode = ");
 		Serial.println(mode);
-		write_ego_address(addr, mode);
+		bool res = write_ego_address(addr, mode);
+		if (res == false)
+		{
+			Serial.println("can not get right set");
+		}
 	}
 }
 
@@ -88,5 +109,10 @@ void setup()
 void loop()
 {
     //BH1750_task();
+	Serial.print("address = ");
+	Serial.println(node_address);
+	Serial.print("mode = ");
+	Serial.println(node_mode);
+	delay(10000);
 }
 
