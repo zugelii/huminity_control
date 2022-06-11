@@ -9,6 +9,12 @@ typedef unsigned char U08;
 typedef unsigned int  U16;
 typedef unsigned long U32;
 
+#define HEAD_MSG  (0xaabb)
+#define FUNC_CODE_OPERATE	(0x01)
+#define FUNC_CODE_READ_UL	(0x03)
+#define FUNC_CODE_READ_TEMP	(0x04)
+
+
 typedef struct
 {
 	U16 header;
@@ -30,7 +36,7 @@ typedef struct
 	U16 header;
 	U08 addr;
 	U08 func;
-	STATUS status;
+	U08 status;
 	U16 crc;
 }ACK_MSG;
 
