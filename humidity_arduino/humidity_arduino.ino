@@ -6,7 +6,6 @@
 #include <RF24.h>
 #include <printf.h>
 #include <nRF24L01.h>
-#include "rf_connection.h"
 #include <Wire.h>
 #include <EEPROM.h>
 #include "wiring_private.h"
@@ -14,7 +13,7 @@
 #include "utils.h"
 #include "bh1750.h"
 
-#define DEBUG_ON
+//#define DEBUG_ON
 
 //nrf2401 mode
 #define MY_CE_PIN       (5)
@@ -23,7 +22,10 @@
 
 #define RADIO_CHANEL	(90)
 
+#define REQUEST_LENGTH	(10)
+#define ACK_LENGTH		(8)
 
+#define MASTER_ADDRESS	(0)
 
 void nrf_init(uint16_t addr);
 uint16_t nrf_read(REQUEST_MSG& msg_);
@@ -42,6 +44,13 @@ enum
 {
 	NODE_MASTER = 'm',
 	NODE_SLAVE  = 's'
+};
+
+enum
+{
+	STATUS_OK = 0,
+	STATUS_NO_CONNECTION,
+	STATUS_OTHER
 };
 
 //ego address map
@@ -116,13 +125,20 @@ bool write_ego_address(U08 addr, char mode)
 
 void setup()
 {
+	Wire.begin();
+	Serial.begin(115200);
+	node_mode = NODE_MASTER;
+}
+#if 0
+void setup()
+{
 	pinMode(MY_RELAY_PIN, OUTPUT);
 	
     Wire.begin();
     Serial.begin(115200);
 	//get node address
 	U16 addr = 0;
-	char mode = 's';
+	char mode = NODE_SLAVE;
 	if (false == read_ego_address())
 	{
 		Serial.println("please input the node mode: m/s");
@@ -140,8 +156,7 @@ void setup()
 			}
 			addr = Serial.parseInt();
 			Serial.print("input address = ");
-			Serial.println((int)addr);
-			
+			Serial.println((int)addr);			
 		}
 		bool res = write_ego_address(addr, mode);
 		if (res == false)
@@ -157,10 +172,14 @@ void setup()
 	Serial.print('/');
 	Serial.println(node_address);
 #endif
+	if (NODE_MASTER == node_mode)
+	{
+		node_address = MASTER_ADDRESS;
+	}
 	nrf_init(node_address);
 }
 
-
+#endif
 
 void nrf_init(uint16_t addr)
 {
@@ -190,18 +209,74 @@ uint16_t nrf_read(REQUEST_MSG& msg_)
 	}
 	return payloadSize;
 }
-bool nrf_write(REQUEST_MSG& msg_, uint16_t addr)
+bool nrf_write_command(REQUEST_MSG& msg_)
 {
-	RF24NetworkHeader header(addr);
-	bool ok = network.write(header, &msg_, sizeof(REQUEST_MSG));
-	return ok;
+	RF24NetworkHeader header(msg_.addr);
+	bool res = network.write(header, &msg_, sizeof(REQUEST_MSG));
+	return res;
 }
 
-bool nrf_write_ack(ACK_MSG& msg_, uint16_t addr)
+bool nrf_write_ack(ACK_MSG& msg_)
 {
-	RF24NetworkHeader header(addr);
-	bool ok = network.write(header, &msg_, sizeof(ACK_MSG));
-	return ok;
+	RF24NetworkHeader header(msg_.addr);
+	bool res = network.write(header, &msg_, sizeof(ACK_MSG));
+	return res;
+}
+
+bool send_ack(uint16_t to_addr, U08 func, U08 sts)
+{
+	ACK_MSG m_msg;
+	bool res = false;
+	m_msg.header = HEAD_MSG;
+	m_msg.addr = (U08)to_addr;
+	m_msg.func = func;
+	m_msg.status = sts;
+	m_msg.crc = CRC((U08*)&m_msg, sizeof(ACK_MSG) - 2);
+	delay(100);
+	if (NODE_MASTER == node_mode)  //this is master node then only ack by uart
+	{
+		Serial.write((char *)&m_msg, sizeof(m_msg));
+		res = true;
+	}
+	else
+	{
+		res = nrf_write_ack(m_msg);
+	}
+	return res;
+}
+
+bool send_command(uint16_t to_addr, U08 func, U32 val)
+{
+	REQUEST_MSG msg_;
+	bool res;
+	msg_.header = HEAD_MSG;
+	msg_.addr = to_addr;
+	msg_.func = FUNC_CODE_OPERATE;
+	msg_.data = val;	
+	msg_.crc = CRC((U08*)&msg_, sizeof(REQUEST_MSG) - 2);
+#ifdef DEBUG_ON
+	Serial.print(msg_.header, HEX);
+	Serial.print(F(": "));
+	Serial.print(msg_.addr, HEX);
+	Serial.print(F(": "));
+	Serial.print(msg_.func, HEX);
+	Serial.print(F(": "));
+	Serial.print(msg_.data, HEX);
+	Serial.print(F(": "));
+	Serial.print(msg_.crc, HEX);
+	Serial.print(F(": "));
+#endif // _ON
+	if (NODE_MASTER == node_mode)
+	{
+		Serial.write((char*)&msg_, sizeof(msg_));
+		res = true;
+	}
+	else
+	{
+		res = nrf_write_command(msg_);
+	}
+	
+	return res;
 }
 
 void parse_command(REQUEST_MSG& msg_)
@@ -210,14 +285,7 @@ void parse_command(REQUEST_MSG& msg_)
 	{
 	case FUNC_CODE_OPERATE:
 		digitalWrite(MY_RELAY_PIN, (U08)(msg_.data));
-		ACK_MSG m_msg;
-		m_msg.header = HEAD_MSG;
-		m_msg.addr = 00;
-		m_msg.func = msg_.func;
-		m_msg.status = 0x0;
-		m_msg.crc = CRC((U08*)&m_msg, sizeof(ACK_MSG) - 2);
-		delay(100);
-		nrf_write_ack(m_msg, 00);
+		send_ack(msg_.addr, msg_.func, STATUS_OK);
 		break;
 	case FUNC_CODE_READ_UL:
 		Serial.println("FUNC_CODE_READ_UL cmd");
@@ -230,116 +298,136 @@ void parse_command(REQUEST_MSG& msg_)
 		break;
 	}
 }
-
 U32 value = 0;
 bool wait_ack_flag = false;
+U08 read_data[20];
+void master_node_loop()
+{
+	//read message from uart
+	static char read_len = 0;
+	static unsigned long last_receve_data_time = millis(); 
+	while (Serial.available())
+	{
+		char inbyte = Serial.read();
+		read_data[read_len] = inbyte;
+		read_len++;
+		if (read_len > 0)
+		{
+			last_receve_data_time = millis(); //only fresh when receiving data from uart
+		}
+		if (read_len == 10) 
+		{
+			if ((read_data[0] == 0xbb) && (read_data[1] == 0xaa))// big / little end problem
+			{
+				REQUEST_MSG msg_;
+				memcpy(&msg_, read_data, read_len);
+				if (MASTER_ADDRESS == msg_.addr)  //only master address
+				{
+					parse_command(msg_);
+				}
+				else  //other node then transpond that command
+				{
+					bool res = nrf_write_command(msg_);  
+					send_ack(msg_.addr, msg_.func, res);
+					//TODO  need to wait slave answer the command
+				}				
+				read_len = 0;
+			}
+		}
+	}
+
+	if ((read_len > 0) && (millis() - last_receve_data_time > 500)) // > 500ms then receive message timeout , need to set read_len to 0
+	{
+		read_len = 0;
+	}
+#if 0
+	//wait the slave send ack message
+	if (false == wait_ack_flag)
+	{
+		value = (value == 0 ? 1 : 0);
+		//test master send mesage
+		Serial.println("master start send");
+		Serial.print("wait_ack_flag: ");
+		Serial.println(wait_ack_flag);
+		
+		bool res = send_command(0x01, FUNC_CODE_OPERATE, value);
+		if (res = true)
+		{
+			Serial.println(F("master write right"));
+		}
+		else
+		{
+			Serial.println(F("master write false"));
+		}
+		wait_ack_flag = true;
+	}
+	else if (true == wait_ack_flag)
+	{
+		ACK_MSG m_ack;
+		//read data from slave
+		RF24NetworkHeader headers;                       // If so, grab it and print it out
+		uint16_t payloadSize = network.peek(headers);    // Use peek() to get the size of the payload
+		if (payloadSize > 0)
+		{
+			network.read(headers, &m_ack, payloadSize); // Get the data
+			wait_ack_flag = 0;
+		}
+	}
+#endif
+}
+
+void slave_node_loop()
+{
+	//read msg from rf2401
+	REQUEST_MSG my_msg;
+	U16 len = nrf_read(my_msg);
+
+	if (len > 0)
+	{
+		U16 crc = CRC((U08*)&my_msg, len - 2);
+		if ((crc == my_msg.crc) && (HEAD_MSG == my_msg.header))
+		{
+#ifdef DEBUG_ON
+			Serial.print("Received packet, size: ");         // Print info about received data
+			Serial.print(len);
+			Serial.print(" ; ");
+			// Uncomment below to print the entire payload  
+			Serial.print(my_msg.header, HEX);
+			Serial.print(F(": "));
+			Serial.print(my_msg.addr, HEX);
+			Serial.print(F(": "));
+			Serial.print(my_msg.func, HEX);
+			Serial.print(F(": "));
+			Serial.print(my_msg.data, HEX);
+			Serial.print(F(": "));
+			Serial.print(my_msg.crc, HEX);
+			Serial.print(F(": "));
+			Serial.println();
+#endif
+			if (node_address == my_msg.addr)
+			{
+				parse_command(my_msg);
+			}
+		}
+	}
+}
+
+
+
 void loop()
 {
     //BH1750_task();
 	network.update();
-	
-
 	if (NODE_MASTER == node_mode)
 	{
-		//write msg from uart
-		
-		if (false == wait_ack_flag)
-		{
-			value = (value == 0 ? 1 : 0);
-			//test master send mesage
-			Serial.println("master start send");
-			Serial.print("wait_ack_flag: ");
-			Serial.println(wait_ack_flag);
-			REQUEST_MSG msg_;
-			msg_.header = HEAD_MSG;
-			msg_.addr = 0x01;
-			msg_.data = value;
-			msg_.func = FUNC_CODE_OPERATE;
-			msg_.crc = CRC((U08*)&msg_, sizeof(REQUEST_MSG) - 2);
-#ifdef DEBUG_ON
-			Serial.print(msg_.header, HEX);
-			Serial.print(F(": "));
-			Serial.print(msg_.addr, HEX);
-			Serial.print(F(": "));
-			Serial.print(msg_.func, HEX);
-			Serial.print(F(": "));
-			Serial.print(msg_.data, HEX);
-			Serial.print(F(": "));
-			Serial.print(msg_.crc, HEX);
-			Serial.print(F(": "));
-#endif // _ON
-
-			bool res = nrf_write(msg_, 0x01);
-			if (res = true)
-			{
-				Serial.println(F("master write right"));
-			}
-			else
-			{
-				Serial.println(F("master write false"));
-			}
-			wait_ack_flag = true;
-		}
-		else if (true == wait_ack_flag)
-		{
-			ACK_MSG m_ack;
-			//read data from slave
-			RF24NetworkHeader headers;                       // If so, grab it and print it out
-			uint16_t payloadSize = network.peek(headers);    // Use peek() to get the size of the payload
-			if (payloadSize > 0)
-			{
-				network.read(headers, &m_ack, payloadSize); // Get the data
-				Serial.println("master receive data");
-				Serial.print(m_ack.header, HEX);
-				Serial.print(F(": "));
-				Serial.print(m_ack.addr, HEX);
-				Serial.print(F(": "));
-				Serial.print(m_ack.func, HEX);
-				Serial.print(F(": "));
-				Serial.print(m_ack.status, HEX);
-				Serial.print(F(": "));
-				Serial.print(m_ack.crc, HEX);
-				Serial.print(F(": "));
-				wait_ack_flag = 0;
-			}	
-		}
+		master_node_loop();
 	}
-	else
+	else if (NODE_SLAVE == node_mode)
 	{
-		//read msg from rf2401
-		REQUEST_MSG my_msg;
-		U16 len = nrf_read(my_msg);
-		
-		if (len > 0)
-		{
-			U16 crc = CRC((U08*)&my_msg, len - 2);
-			if ((crc == my_msg.crc) && (HEAD_MSG == my_msg.header))
-			{
-#ifdef DEBUG_ON
-				Serial.print("Received packet, size: ");         // Print info about received data
-				Serial.print(len);
-				Serial.print(" ; ");
-				// Uncomment below to print the entire payload  
-				Serial.print(my_msg.header, HEX);
-				Serial.print(F(": "));
-				Serial.print(my_msg.addr, HEX);
-				Serial.print(F(": "));
-				Serial.print(my_msg.func, HEX);
-				Serial.print(F(": "));
-				Serial.print(my_msg.data, HEX);
-				Serial.print(F(": "));
-				Serial.print(my_msg.crc, HEX);
-				Serial.print(F(": "));
-				Serial.println();
-#endif
-				if (node_address == my_msg.addr)
-				{
-					parse_command(my_msg);
-				}
-			}
-		}
+		slave_node_loop();
 	}
-
+	
+	//send_command(0x01, FUNC_CODE_OPERATE, 1);
 	delay(1000);
 }
 
