@@ -123,13 +123,13 @@ bool write_ego_address(U08 addr, char mode)
 	return res;
 }
 
-void setup()
-{
-	Wire.begin();
-	Serial.begin(115200);
-	node_mode = NODE_MASTER;
-}
-#if 0
+//void setup()
+//{
+//	Wire.begin();
+//	Serial.begin(115200);
+//	node_mode = NODE_MASTER;
+//}
+
 void setup()
 {
 	pinMode(MY_RELAY_PIN, OUTPUT);
@@ -179,7 +179,7 @@ void setup()
 	nrf_init(node_address);
 }
 
-#endif
+
 
 void nrf_init(uint16_t addr)
 {
@@ -251,7 +251,7 @@ bool send_command(uint16_t to_addr, U08 func, U32 val)
 	bool res;
 	msg_.header = HEAD_MSG;
 	msg_.addr = to_addr;
-	msg_.func = FUNC_CODE_OPERATE;
+	msg_.func = func;
 	msg_.data = val;	
 	msg_.crc = CRC((U08*)&msg_, sizeof(REQUEST_MSG) - 2);
 #ifdef DEBUG_ON
@@ -426,8 +426,7 @@ void loop()
 	{
 		slave_node_loop();
 	}
-	
-	//send_command(0x01, FUNC_CODE_OPERATE, 1);
+	//send_command(0x00, FUNC_CODE_OPERATE, 1);
 	delay(1000);
 }
 
