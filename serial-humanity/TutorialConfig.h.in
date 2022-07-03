@@ -1,0 +1,12 @@
+/*
+ * @Author: gabe
+ * @Date: 2022-06-25 08:22:46
+ * @LastEditors: gabe
+ * @LastEditTime: 2022-06-25 09:01:56
+ * @Description: 
+ */
+// the configured options and settings for Tutorial
+#define Tutorial_VERSION_MAJOR @Tutorial_VERSION_MAJOR@
+#define Tutorial_VERSION_MINOR @Tutorial_VERSION_MINOR@
+
+#cmakedefine USE_MYMATH
