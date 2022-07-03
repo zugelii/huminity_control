@@ -8,12 +8,15 @@
 #include <nRF24L01.h>
 #include <Wire.h>
 #include <EEPROM.h>
+#include <avr/wdt.h>
 #include "wiring_private.h"
 #include <math.h> 
 #include "utils.h"
 #include "bh1750.h"
 
 //#define DEBUG_ON
+//#define MASTER_MODE 
+#define RELAY_ADDRESS	(1)
 
 //nrf2401 mode
 #define MY_CE_PIN       (5)
@@ -132,6 +135,8 @@ bool write_ego_address(U08 addr, char mode)
 
 void setup()
 {
+	wdt_disable();
+	pinMode(MY_RELAY_PIN, HIGH);
 	pinMode(MY_RELAY_PIN, OUTPUT);
 	
     Wire.begin();
@@ -139,6 +144,14 @@ void setup()
 	//get node address
 	U16 addr = 0;
 	char mode = NODE_SLAVE;
+#ifdef MASTER_MODE
+	mode = NODE_MASTER;
+#endif // 
+	node_mode = mode;
+	node_address = RELAY_ADDRESS;
+
+
+#if 0
 	if (false == read_ego_address())
 	{
 		Serial.println("please input the node mode: m/s");
@@ -164,18 +177,20 @@ void setup()
 			Serial.println("can not get right set");
 		}
 	}
-
-	//init rf2401
-#ifdef DEBUG_ON
-	Serial.print("system write mode/address: ");
-	Serial.print(node_mode);
-	Serial.print('/');
-	Serial.println(node_address);
 #endif
+	//init rf2401
+
 	if (NODE_MASTER == node_mode)
 	{
 		node_address = MASTER_ADDRESS;
 	}
+#ifdef DEBUG_ON
+	Serial.print("system write mode/address: ");
+	Serial.print(mode);
+	Serial.print('/');
+	Serial.println(node_address);
+#endif
+	wdt_enable(WDTO_4S);
 	nrf_init(node_address);
 }
 
@@ -183,10 +198,19 @@ void setup()
 
 void nrf_init(uint16_t addr)
 {
-	if (!radio.begin())
+	char re_check = 0;
+	while (!radio.begin())
 	{
 		Serial.println(F("radio hardware is not responding!!"));
-		while (1) {} // hold in infinite loop
+		delay(1000);
+		if (re_check++ > 5)
+		{
+			//reboot 
+			while (1)
+			{
+
+			}
+		}
 	}
 	radio.setChannel(RADIO_CHANEL);
 	network.begin(addr);
@@ -232,7 +256,7 @@ bool send_ack(uint16_t to_addr, U08 func, U08 sts)
 	m_msg.func = func;
 	m_msg.status = sts;
 	m_msg.crc = CRC((U08*)&m_msg, sizeof(ACK_MSG) - 2);
-	delay(100);
+	
 	if (NODE_MASTER == node_mode)  //this is master node then only ack by uart
 	{
 		Serial.write((char *)&m_msg, sizeof(m_msg));
@@ -240,6 +264,7 @@ bool send_ack(uint16_t to_addr, U08 func, U08 sts)
 	}
 	else
 	{
+		delay(100);
 		res = nrf_write_ack(m_msg);
 	}
 	return res;
@@ -263,15 +288,14 @@ bool send_command(uint16_t to_addr, U08 func, U32 val)
 	Serial.print(F(": "));
 	Serial.print(msg_.data, HEX);
 	Serial.print(F(": "));
-	Serial.print(msg_.crc, HEX);
-	Serial.print(F(": "));
+	Serial.println(msg_.crc, HEX);
 #endif // _ON
-	if (NODE_MASTER == node_mode)
-	{
-		Serial.write((char*)&msg_, sizeof(msg_));
-		res = true;
-	}
-	else
+	//if (NODE_MASTER == node_mode)
+	//{
+	//	Serial.write((char*)&msg_, sizeof(msg_));
+	//	res = true;
+	//}
+	//else
 	{
 		res = nrf_write_command(msg_);
 	}
@@ -413,7 +437,7 @@ void slave_node_loop()
 }
 
 
-
+char val = 0;
 void loop()
 {
     //BH1750_task();
@@ -426,7 +450,9 @@ void loop()
 	{
 		slave_node_loop();
 	}
-	//send_command(0x00, FUNC_CODE_OPERATE, 1);
-	delay(1000);
+	//val = (val == 1 ? 0 : 1);
+	//send_command(0x01, FUNC_CODE_OPERATE, val);
+	delay(500);
+	wdt_reset();
 }
 
