@@ -10,7 +10,7 @@
 #else
 	#include "WProgram.h"
 #endif
-
-void BH1750_task();
+void BH1750_Init(int address);
+void BH1750_task(uint16_t &val);
 #endif
 

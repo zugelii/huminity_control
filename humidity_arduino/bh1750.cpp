@@ -26,19 +26,15 @@ void BH1750_Init(int address)
 	Wire.beginTransmission(address);
 	Wire.write(0x10);//1lx reolution 120ms
 	Wire.endTransmission();
+	delay(200);
 }
 
-void BH1750_task()
+void BH1750_task(uint16_t &val)
 {
-	int i;
-	uint16_t val = 0;
-	BH1750_Init(BH1750address);
-	delay(200);
 	if (2 == BH1750_Read(BH1750address))
 	{
 		val = ((buff[0] << 8) | buff[1]) / 1.2;
 		Serial.print(val, DEC);
 		Serial.println("[lx]");
 	}
-	delay(150);
 }
